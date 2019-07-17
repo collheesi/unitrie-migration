@@ -15,5 +15,5 @@ repositories {
 }
 
 dependencies {
-  compile 'co.rsk:rskj-core:0.7.0-SNAPSHOT'
+  compile 'co.rsk:rskj-core:1.0.0-WASABI'
 }

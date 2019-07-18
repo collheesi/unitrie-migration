@@ -30,6 +30,7 @@ import org.ethereum.crypto.Keccak256Helper;
 import org.ethereum.datasource.KeyValueDataSource;
 import org.ethereum.db.BlockStore;
 import org.ethereum.db.TrieKeyMapper;
+import org.ethereum.vm.DataWord;
 import org.mapdb.DB;
 import org.mapdb.DBMaker;
 import org.mapdb.Serializer;
@@ -70,7 +71,7 @@ public class StorageKeysHashesGenerator {
                 if (nodeKey.length() > storageKeyUnitrieLength * Byte.SIZE && currentElement.getNode().isTerminal()) {
                     byte[] encodedUnitrieKey = nodeKey.encode();
                     byte[] storageKey = Arrays.copyOfRange(encodedUnitrieKey, storageKeyUnitrieLength, encodedUnitrieKey.length);
-                    byte[] storageKeyHash = Keccak256Helper.keccak256(storageKey);
+                    byte[] storageKeyHash = Keccak256Helper.keccak256(DataWord.valueOf(storageKey).getData());
                     filesCounter++;
                     keccakPreimages.put(storageKeyHash, storageKey);
                     if (filesCounter % 1000 == 0) {

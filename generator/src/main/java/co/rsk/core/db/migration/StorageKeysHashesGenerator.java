@@ -46,47 +46,74 @@ import java.util.stream.Collectors;
 
 public class StorageKeysHashesGenerator {
 
+    private static final byte[] LAST_EXTRACTED_BLOCK_NUMBER = {0, 0, 0, 1};
+
     public static void main(String[] args) throws IOException {
         String databaseDir = "/database";
         BlockStore blockStore = RskContext.buildBlockStore(new BlockFactory(orchid()), databaseDir);
         KeyValueDataSource stateRootsTranslator = RskContext.makeDataSource("stateRoots", databaseDir);
         KeyValueDataSource unitrieDataSource = RskContext.makeDataSource("unitrie", databaseDir);
         TrieStoreImpl unitrieStore = new TrieStoreImpl(unitrieDataSource);
-        Block bestBlock = blockStore.getBestBlock();
-        Trie lastUnitrie = unitrieStore.retrieve(stateRootsTranslator.get(bestBlock.getStateRoot()));
-        Iterator<Trie.IterationElement> iterator = lastUnitrie.getInOrderIterator();
 
         Path destinationPath = Paths.get("/tmp", "migration-extras");
-        int filesCounter = 0;
+        Path outputPath = Paths.get("/output", "migration-extras");
+        if (Files.exists(outputPath)) {
+            Files.copy(outputPath, destinationPath);
+        }
+
         try(DB indexDB = DBMaker.fileDB(destinationPath.toFile()).closeOnJvmShutdown().make()) {
             Map<byte[], byte[]> keccakPreimages = indexDB.hashMapCreate("preimages")
                     .keySerializer(Serializer.BYTE_ARRAY)
                     .valueSerializer(Serializer.BYTE_ARRAY)
                     .makeOrGet();
+            Block bestBlock = blockStore.getBestBlock();
+            long from = bytesToLong(keccakPreimages.getOrDefault(LAST_EXTRACTED_BLOCK_NUMBER, longToBytes(bestBlock.getNumber()))) + 1;
+            long to = bestBlock.getNumber();
 
-            while (iterator.hasNext()) {
-                Trie.IterationElement currentElement = iterator.next();
-                int storageKeyUnitrieLength = (1 + TrieKeyMapper.SECURE_KEY_SIZE + RskAddress.LENGTH_IN_BYTES + 1 + TrieKeyMapper.SECURE_KEY_SIZE);
-                TrieKeySlice nodeKey = currentElement.getNodeKey();
-                if (nodeKey.length() > storageKeyUnitrieLength * Byte.SIZE && currentElement.getNode().isTerminal()) {
-                    byte[] encodedUnitrieKey = nodeKey.encode();
-                    byte[] storageKey = Arrays.copyOfRange(encodedUnitrieKey, storageKeyUnitrieLength, encodedUnitrieKey.length);
-                    byte[] storageKeyHash = Keccak256Helper.keccak256(DataWord.valueOf(storageKey).getData());
-                    filesCounter++;
-                    keccakPreimages.put(storageKeyHash, storageKey);
-                    if (filesCounter % 1000 == 0) {
-                        System.out.print(".");
-                    }
-                    if (filesCounter % 72000 == 0) {
-                        System.out.println();
-                    }
+            System.out.printf("Collecting keys from block %d to %d", from, to);
+            for(long i = from; i <= to; i++) {
+                System.out.printf("\nCollecting keys for block %d\n", i);
+                Block blockToExtractStorageKeys = blockStore.getChainBlockByNumber(i);
+                Trie unitrieToExtractStorageKeys = unitrieStore.retrieve(stateRootsTranslator.get(blockToExtractStorageKeys.getStateRoot()));
+                extractStorageKeysFromUnitrie(keccakPreimages, unitrieToExtractStorageKeys);
+            }
+            keccakPreimages.put(LAST_EXTRACTED_BLOCK_NUMBER, longToBytes(to));
+            indexDB.commit();
+            System.out.printf("\nTotal number of keys %d up to block %d\n", keccakPreimages.size(), to);
+        }
+        Files.copy(destinationPath, outputPath, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    private static void extractStorageKeysFromUnitrie(Map<byte[], byte[]> keccakPreimages, Trie unitrieToExtractStorageKeys) {
+        Iterator<Trie.IterationElement> iterator = unitrieToExtractStorageKeys.getInOrderIterator();
+
+        int collectedKeysCounter = 0;
+        while (iterator.hasNext()) {
+            Trie.IterationElement currentElement = iterator.next();
+            int storageKeyUnitrieLength = (1 + TrieKeyMapper.SECURE_KEY_SIZE + RskAddress.LENGTH_IN_BYTES + 1 + TrieKeyMapper.SECURE_KEY_SIZE);
+            TrieKeySlice nodeKey = currentElement.getNodeKey();
+            if (nodeKey.length() > storageKeyUnitrieLength * Byte.SIZE && currentElement.getNode().isTerminal()) {
+                byte[] encodedUnitrieKey = nodeKey.encode();
+                byte[] storageKey = Arrays.copyOfRange(encodedUnitrieKey, storageKeyUnitrieLength, encodedUnitrieKey.length);
+                byte[] storageKeyHash = Keccak256Helper.keccak256(DataWord.valueOf(storageKey).getData());
+                keccakPreimages.put(storageKeyHash, storageKey);
+                collectedKeysCounter++;
+                if (collectedKeysCounter % 1000 == 0) {
+                    System.out.print(".");
+                }
+                if (collectedKeysCounter % 72000 == 0) {
+                    System.out.println();
                 }
             }
-            indexDB.commit();
-            System.out.println();
-            System.out.println("keys " + filesCounter + " for block " + bestBlock.getNumber());
-        };
-        Files.copy(destinationPath, Paths.get("/output", "migration-extras"), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static long bytesToLong(byte[] bytes) {
+        return Long.parseLong(new String(bytes));
+    }
+
+    private static byte[] longToBytes(long number) {
+        return String.valueOf(number).getBytes();
     }
 
     public static ActivationConfig orchid() {
